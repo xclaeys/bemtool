@@ -4,6 +4,8 @@
 #include <htool/htool.hpp>
 #include <bemtool/fem/dof.hpp>
 #include <bemtool/operator/operator.hpp>
+#include <bemtool/operator/block_op.hpp>
+#include <bemtool/potential/potential.hpp>
 
 namespace bemtool{
 
@@ -11,26 +13,70 @@ template <typename KernelType, typename Discretization>
 class BIO_Generator : public htool::IMatrix<Cplx>{
   Dof<Discretization> dof;
   SubBIOp<BIOp<KernelType>> subV;
+  // std::vector<int> boundary;
 
 public:
-  BIO_Generator(const Dof<Discretization>& dof0, const double& kappa):IMatrix(NbDof(dof0),NbDof(dof0)), dof(dof0),subV(dof,dof,kappa) {}
+    BIO_Generator(const Dof<Discretization>& dof0, const double& kappa):IMatrix(NbDof(dof0),NbDof(dof0)), dof(dof0),subV(dof,dof,kappa) {}
+    // {boundary=is_boundary_nodes(dof);}
 
-  Cplx get_coef(const int& i, const int& j) const {
-      std::vector<int> J(1,i);
-      std::vector<int> K(1,j);
-    htool::SubMatrix<Cplx> mat(J,K);
+  void copy_submatrix(int M, int N, const int *const rows, const int *const cols, Cplx *ptr) const {
     SubBIOp<BIOp<KernelType>> subV_local = subV;
-    subV_local.compute_block(J,K,mat);
-    return mat(0,0);
+    subV_local.compute_block(M,N,rows,cols,ptr);
   }
 
-  htool::SubMatrix<Cplx> get_submatrix(const std::vector<int>& J, const std::vector<int>& K) const{
-      // std::cout << "COUCOU"<<std::endl;
-    htool::SubMatrix<Cplx> mat(J,K);
+};
+
+template <typename KernelType, typename Discretization>
+class BIO_Generator_w_mass : public htool::IMatrix<Cplx>{
+  Dof<Discretization> dof;
+  SubBIOp<BIOp<KernelType>> subV;
+  // std::vector<int> boundary;
+  double coef;
+
+public:
+    BIO_Generator_w_mass(const Dof<Discretization>& dof0, const double& kappa,const double& coef0):IMatrix(NbDof(dof0),NbDof(dof0)), dof(dof0),subV(dof,dof,kappa),coef(coef0) {}
+    // {boundary=is_boundary_nodes(dof);}
+
+
+
+  void copy_submatrix(int M, int N, const int *const rows, const int *const cols, Cplx *ptr) const {
     SubBIOp<BIOp<KernelType>> subV_local = subV;
-    subV_local.compute_block(J,K,mat);
-    return mat;
-  }
+    subV_local.compute_block_w_mass(M,N,rows,cols,ptr,coef);
+
+}
+
+};
+
+template <typename KernelType1, typename KernelType2, typename Discretization>
+class Combined_BIO_Generator : public htool::IMatrix<Cplx>{
+  Dof<Discretization> dof;
+  SubBIOp<BIOp<KernelType1>> sub1;
+  SubBIOp<BIOp<KernelType2>> sub2;
+  // std::vector<int> boundary;
+  Cplx combined_coef_1,combined_coef_2;
+  double mass_coef;
+
+public:
+    Combined_BIO_Generator(const Dof<Discretization>& dof0, const double& kappa,const Cplx& coef1,const Cplx& coef2,const double& mass_coef0):IMatrix(NbDof(dof0),NbDof(dof0)), dof(dof0),sub1(dof,dof,kappa),sub2(dof,dof,kappa),combined_coef_1(coef1), combined_coef_2(coef2),mass_coef(mass_coef0) {}
+    
+    Combined_BIO_Generator(const Dof<Discretization>& dof0, const double& kappa,const Cplx& coef1,const double& mass_coef0):IMatrix(NbDof(dof0),NbDof(dof0)), dof(dof0),sub1(dof,dof,kappa),sub2(dof,dof,kappa),combined_coef_1(coef1), combined_coef_2(1),mass_coef(mass_coef0) {}
+
+
+  void copy_submatrix(int M, int N, const int *const rows, const int *const cols, Cplx *ptr) const {
+    SubBIOp<BIOp<KernelType1>> sub1_local = sub1;
+    SubBIOp<BIOp<KernelType2>> sub2_local = sub2;
+    sub1_local.compute_block(M,N,rows,cols,ptr);
+    std::transform(ptr, ptr+M*N, ptr,
+               std::bind(std::multiplies<Cplx>(), std::placeholders::_1, combined_coef_1));
+    std::vector<Cplx> tmp(M*N,0);
+    sub2_local.compute_block_w_mass(M,N,rows,cols,tmp.data(),mass_coef);
+    int size = M*N;
+    int incx(1), incy(1);
+    htool::Blas<Cplx>::axpy(&size, &combined_coef_2, tmp.data(),&incx,ptr,&incy);
+
+
+
+}
 
 };
 
@@ -56,9 +102,11 @@ class SubBIO_Neumann_Generator : public htool::IMatrix<Cplx>{
     std::map<int,Nlocx>  Ix;
     std::map<int,Nlocy>  Iy;
 
+    // std::vector<int> boundary;
+
 public:
     SubBIO_Neumann_Generator(const Dof<Discretization>& dof0, const double& kappa, const std::vector<int>& targets0 , const std::vector<int>& sources0):IMatrix(NbDof(dof0),NbDof(dof0)), dof(dof0),subV(dof,dof,kappa) {
-
+        // boundary=is_boundary_nodes(dof);
         for(int k=0; k<targets0.size(); k++){
             const std::vector<N2>& jj = dof.ToElt(targets0[k]);
             for(int l=0; l<jj.size(); l++){
@@ -74,21 +122,12 @@ public:
         }
     }
 
-  Cplx get_coef(const int& i, const int& j) const {
-      std::vector<int> J(1,i);
-      std::vector<int> K(1,j);
-    htool::SubMatrix<Cplx> mat(J,K);
-    SubBIOp<BIOp<KernelType>> subV_local = subV;
-    subV_local.compute_neumann_block(J,K,mat,Ix,Iy);
-    return mat(0,0);
-  }
 
-  htool::SubMatrix<Cplx> get_submatrix(const std::vector<int>& J, const std::vector<int>& K) const{
 
-    htool::SubMatrix<Cplx> mat(J,K);
+  void copy_submatrix(int M, int N, const int *const rows, const int *const cols, Cplx *ptr) const {
+
     SubBIOp<BIOp<KernelType>> subV_local = subV;
-    subV_local.compute_neumann_block(J,K,mat,Ix,Iy);
-    return mat;
+    subV_local.compute_neumann_block(M,N,rows,cols,ptr,Ix,Iy);
   }
 
 };
@@ -146,18 +185,12 @@ class POT_Generator : public htool::IMatrix<Cplx>{
 public:
   POT_Generator(Potential<KernelType>& V0, Dof<Discretization>& dof0, Geometry& geometry0):IMatrix(NbNode(geometry0),NbDof(dof0)), V(V0), dof(dof0), geometry(geometry0) {}
 
-  Cplx get_coef(const int& i, const int& j) const {
-      Potential<KernelType>& V_local=V;
-    return V_local(geometry[i],dof.ToElt(j));
-}
-  htool::SubMatrix<Cplx> get_submatrix(const std::vector<int>& I, const std::vector<int>& J) const{
+  void copy_submatrix(int M, int N, const int *const rows, const int *const cols, Cplx *ptr) const {
     Potential<KernelType> V_local = V;
-    htool::SubMatrix<Cplx> mat(I,J);
-    for (int i=0; i<mat.nb_rows(); i++)
-        for (int j=0; j<mat.nb_cols(); j++)
-            mat(i,j) = V_local(geometry[I[i]],dof.ToElt(J[j]));
-    return mat;
-}
+    for (int i=0; i<M; i++)
+        for (int j=0; j<N; j++)
+            ptr[i+j*M] = V_local(geometry[rows[i]],dof.ToElt(cols[j]));
+  }
 
 };
 

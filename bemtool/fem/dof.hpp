@@ -171,6 +171,26 @@ public:
       }
     }
   }
+  // special constructor for FreeFEM dof numbering
+  Dof<ShapeFct>(const typename Trait::mesh_t& m, bool numToFF):
+  mesh_p(&m), node_p(&GeometryOf(m)), nb_elt(NbElt(m)), offset(0) {
+    
+    const int nb_node = NbNode(*node_p);
+    const typename Trait::mesh_t&  mesh = *mesh_p;
+
+    nb_dof = nb_node;
+    elt_to_dof.resize(NbElt(mesh));
+    dof_to_elt.resize(nb_node);
+    std::vector<int> num(nb_node,-1);
+    for(int j=0; j<NbElt(mesh); j++){
+      array<Trait::dim+1,int> I = Num(mesh[j]);
+      for(int k=0; k<Trait::dim+1; k++){
+		elt_to_dof[j][k] = I[k] ;
+	    dof_to_elt[ I[k] ].push_back( N2_(j,k) );
+       }
+    }
+	
+  }
 
   typename Trait::R3loc operator()(const int& j) const {
     Elt<Trait::dim> e = (*mesh_p)[j];
@@ -195,6 +215,11 @@ public:
   const std::vector<N2>& ToElt(const int& j) const {
     assert(j>=offset && j<offset+nb_dof);
     return dof_to_elt[j-offset];}
+
+
+    const Elt<Trait::dim>& get_elt(int j) const{
+      return (*mesh_p)[j];
+    }
 
   friend const typename Trait::mesh_t&
   MeshOf(const this_t& dof){return *(dof.mesh_p);}
